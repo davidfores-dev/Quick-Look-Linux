@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+LAUNCH="$HOME/.local/bin/quicklook-launch"
+URI="${1:-}"
+
+[[ -x "$LAUNCH" ]] || exit 30
+[[ -n "$URI" ]] || exit 31
+
+PATH_DECODED="$(
+python3 - "$URI" <<'PY'
+import sys
+from urllib.parse import unquote, urlparse
+
+uri = sys.argv[1]
+prefix = "quicklook-linux:"
+if not uri.startswith(prefix):
+    raise SystemExit(32)
+
+inner = unquote(uri[len(prefix):])
+
+if inner.startswith("file:"):
+    u = urlparse(inner)
+    print(unquote(u.path))
+else:
+    print(inner)
+PY
+)"
+
+[[ -n "$PATH_DECODED" ]] || exit 33
+[[ -e "$PATH_DECODED" ]] || exit 34
+
+exec "$LAUNCH" "$PATH_DECODED"

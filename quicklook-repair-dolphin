@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+MODE="${1:---runtime-refresh}"
+HOME_DIR="${HOME}"
+ACTION_NAME='servicemenu_quicklook-linux.desktop::QuickLookPreview'
+
+CANDIDATES=(
+  "$HOME_DIR/.local/share/kxmlgui5/dolphin/dolphinui.rc"
+  "$HOME_DIR/.local/share/kxmlgui6/dolphin/dolphinui.rc"
+)
+
+changed_any=0
+patched_any=0
+
+for rc in "${CANDIDATES[@]}"; do
+  [[ -f "$rc" ]] || continue
+  mkdir -p "$(dirname "$rc")"
+  cp -a "$rc" "$rc.quicklook-backup" 2>/dev/null || true
+
+  result="$(python3 - "$rc" "$ACTION_NAME" <<'PY'
+import re, sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+action_name = sys.argv[2]
+raw = path.read_text(encoding='utf-8', errors='replace')
+text = raw
+
+pattern = re.compile(r'(<ActionProperties\b[^>]*\bscheme=["\']Default["\'][^>]*>)(.*?)(</ActionProperties>)', re.S)
+m = pattern.search(text)
+if not m:
+    close = re.search(r'</gui\s*>', text, re.I)
+    if not close:
+        print('parse_error')
+        raise SystemExit(0)
+    block = '\n <ActionProperties scheme="Default">\n </ActionProperties>\n'
+    text = text[:close.start()] + block + text[close.start():]
+    m = pattern.search(text)
+
+head, body, tail = m.group(1), m.group(2), m.group(3)
+
+def set_shortcut(body, name, shortcut):
+    pat = re.compile(r'<Action\b(?=[^>]*\bname=["\']' + re.escape(name) + r'["\'])[^>]*/>', re.S)
+    matches = list(pat.finditer(body))
+
+    def patch_tag(tag):
+        if re.search(r'\bshortcut=["\'][^"\']*["\']', tag):
+            return re.sub(r'\bshortcut=["\'][^"\']*["\']', f'shortcut="{shortcut}"', tag, count=1)
+        return re.sub(r'\s*/>$', f' shortcut="{shortcut}"/>', tag)
+
+    if matches:
+        first = matches[0]
+        before = body[:first.start()]
+        after = body[first.end():]
+        after = pat.sub('', after)
+        return before + patch_tag(first.group(0)) + after
+
+    return body + f'\n  <Action name="{name}" shortcut="{shortcut}"/>'
+
+body = set_shortcut(body, 'toggle_selection_mode', 'none')
+body = set_shortcut(body, action_name, 'Space')
+newblock = head + body + tail
+text2 = text[:m.start()] + newblock + text[m.end():]
+
+if text2 != raw:
+    path.write_text(text2, encoding='utf-8')
+    print('changed')
+else:
+    print('ok')
+PY
+)"
+
+  case "$result" in
+    changed) changed_any=1; patched_any=1 ;;
+    ok) patched_any=1 ;;
+    parse_error) ;;
+  esac
+done
+
+if [[ "$patched_any" -eq 0 ]]; then
+  exit 10
+fi
+
+# Dolphin 26.04.x has an upstream bug where reloading service-menu actions
+# drops their live keyboard shortcuts until Dolphin starts again.
+if [[ "$MODE" == "--runtime-refresh" || "$changed_any" -eq 1 ]]; then
+  if pgrep -x dolphin >/dev/null 2>&1; then
+    kquitapp6 dolphin >/dev/null 2>&1 || true
+    for _ in {1..30}; do
+      pgrep -x dolphin >/dev/null 2>&1 || break
+      sleep 0.1
+    done
+    if pgrep -x dolphin >/dev/null 2>&1; then
+      pkill -TERM -x dolphin 2>/dev/null || true
+      sleep 0.4
+    fi
+    nohup dolphin >/dev/null 2>&1 &
+  fi
+fi
+
+exit 0

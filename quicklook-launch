@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+BIN="$HOME/.local/bin/quicklook-linux"
+FILE="${1:-}"
+
+[[ -x "$BIN" ]] || exit 20
+[[ -n "$FILE" ]] || exit 21
+[[ -e "$FILE" ]] || exit 22
+
+# R8.2: recalcular las reglas de posición EN CADA APERTURA.
+# Así una actualización de Plasma, un cambio de panel/escalado/resolución o
+# un cambio de pantalla principal no deja coordenadas KWin antiguas.
+refresh_kwin_position() {
+    command -v kwriteconfig6 >/dev/null 2>&1 || return 0
+    command -v kreadconfig6 >/dev/null 2>&1 || return 0
+
+    local geo gx gy gw gh can_w can_h aud_w aud_h can_x can_y aud_x aud_y
+    geo="$($BIN --print-available-geometry 2>/dev/null || true)"
+    read -r gx gy gw gh <<< "$geo"
+
+    [[ "$gx" =~ ^-?[0-9]+$ ]] || return 0
+    [[ "$gy" =~ ^-?[0-9]+$ ]] || return 0
+    [[ "$gw" =~ ^[0-9]+$ ]] || return 0
+    [[ "$gh" =~ ^[0-9]+$ ]] || return 0
+
+    can_w=820; can_h=540; aud_w=760; aud_h=430
+    (( can_w > gw - 80 )) && can_w=$((gw - 80))
+    (( can_h > gh - 100 )) && can_h=$((gh - 100))
+    (( aud_w > gw - 80 )) && aud_w=$((gw - 80))
+    (( aud_h > gh - 100 )) && aud_h=$((gh - 100))
+
+    can_x=$((gx + (gw - can_w) / 2))
+    can_y=$((gy + (gh - can_h) / 2))
+    aud_x=$((gx + (gw - aud_w) / 2))
+    aud_y=$can_y
+
+    kwriteconfig6 --file kwinrulesrc --group QuickLookLinuxInitialPlacement --key position "$can_x,$can_y"
+    kwriteconfig6 --file kwinrulesrc --group QuickLookLinuxInitialPlacement --key positionrule 3
+    kwriteconfig6 --file kwinrulesrc --group QuickLookLinuxAudioInitialPlacement --key position "$aud_x,$aud_y"
+    kwriteconfig6 --file kwinrulesrc --group QuickLookLinuxAudioInitialPlacement --key positionrule 3
+
+    command -v qdbus6 >/dev/null 2>&1 && qdbus6 org.kde.KWin /KWin reconfigure >/dev/null 2>&1 || true
+}
+
+refresh_kwin_position
+
+# Keep a single QuickLook process. Repeated Space presses or a stalled converter
+# must never pile up detached preview processes behind Dolphin.
+if pgrep -x quicklook-linux >/dev/null 2>&1; then
+    pkill -TERM -x quicklook-linux 2>/dev/null || true
+    for _ in {1..8}; do
+        pgrep -x quicklook-linux >/dev/null 2>&1 || break
+        sleep 0.05
+    done
+    pgrep -x quicklook-linux >/dev/null 2>&1 && pkill -KILL -x quicklook-linux 2>/dev/null || true
+fi
+
+# QuickLook must never block Dolphin or plasmashell.
+setsid -f "$BIN" "$FILE" </dev/null >/dev/null 2>&1
+exit 0

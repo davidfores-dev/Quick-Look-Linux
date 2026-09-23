@@ -1,0 +1,10 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = plasma-desktop
+
+[Action]
+Description = Reaplicando QuickLook Space en el escritorio Plasma...
+When = PostTransaction
+Exec = /usr/local/lib/quicklook-linux/repair-folderview-root

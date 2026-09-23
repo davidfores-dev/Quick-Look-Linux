@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+TARGET="/usr/share/plasma/plasmoids/org.kde.desktopcontainment/contents/ui/FolderView.qml"
+MARKER="QUICKLOOK_LINUX_DESKTOP_SPACE_R2"
+LOGDIR="/var/lib/quicklook-linux"
+BACKDIR="$LOGDIR/backups"
+LOGFILE="$LOGDIR/last-desktop-repair.log"
+
+mkdir -p "$BACKDIR"
+: > "$LOGFILE"
+exec > >(tee -a "$LOGFILE") 2>&1
+
+echo "QUICKLOOK_DESKTOP_REPAIR=R2_ORIGINAL"
+echo "TARGET=$TARGET"
+
+[[ -f "$TARGET" ]] || { echo "ERROR=FOLDERVIEW_NO_EXISTE"; exit 40; }
+
+if grep -qE 'QUICKLOOK_LINUX_DESKTOP_SPACE_R(3|4|5)' "$TARGET"; then
+    echo "ERROR=EXISTE_PARCHE_POSTERIOR_R3_R4_R5"
+    exit 41
+fi
+
+BEFORE="$(sha256sum "$TARGET" | awk '{print $1}')"
+echo "SHA256_BEFORE=$BEFORE"
+
+if grep -q "$MARKER" "$TARGET"; then
+    echo "PATCH=YA_PRESENTE_R2"
+    echo "SHA256_AFTER=$BEFORE"
+    exit 0
+fi
+
+# Guards against patching an unrelated/changed QML file.
+grep -q 'Keys.onPressed:[[:space:]]*event[[:space:]]*=>' "$TARGET" || { echo "ERROR=NO_KEYS_ONPRESSED"; exit 42; }
+grep -q 'id:[[:space:]]*gridView' "$TARGET" || { echo "ERROR=NO_GRIDVIEW"; exit 43; }
+grep -q 'Folder.ShortCut' "$TARGET" || { echo "ERROR=NO_FOLDER_SHORTCUT"; exit 44; }
+grep -q 'typeAheadTimer.restart()' "$TARGET" || { echo "ERROR=NO_TYPEAHEAD"; exit 45; }
+
+STAMP="$(date +%Y%m%d_%H%M%S)"
+cp -a "$TARGET" "$BACKDIR/FolderView.qml.$STAMP.original"
+echo "BACKUP=$BACKDIR/FolderView.qml.$STAMP.original"
+
+TMP="$(mktemp /tmp/quicklook-folderview-r2.XXXXXX.qml)"
+trap 'rm -f "$TMP"' EXIT
+cp -a "$TARGET" "$TMP"
+
+python3 - "$TMP" <<'PY'
+from pathlib import Path
+import re, sys
+
+p = Path(sys.argv[1])
+s = p.read_text(encoding="utf-8")
+marker = "QUICKLOOK_LINUX_DESKTOP_SPACE_R2"
+
+if marker in s:
+    raise SystemExit(0)
+
+# Match the real generic key handler in Plasma 6.7.x. We deliberately insert
+# BEFORE Plasma's type-ahead branch so Space never becomes a search character.
+pat = re.compile(
+    r'(?m)^(?P<i>[ \t]*)Keys\.onPressed:[ \t]*event[ \t]*=>[ \t]*\{[ \t]*\n'
+    r'(?P=i)[ \t]+// Start by assuming we might handle it[ \t]*\n'
+)
+m = pat.search(s)
+if not m:
+    print("ERROR=R2_NO_MATCH_KEYS_HANDLER")
+    raise SystemExit(70)
+
+i = m.group('i')
+b = i + '    '
+block = (
+    f"{i}Keys.onPressed: event => {{\n"
+    f"{b}// {marker}\n"
+    f"{b}// Espacio sobre un icono seleccionado del escritorio abre QuickLook.\n"
+    f"{b}// Ruta original funcional: FolderView -> custom URL handler -> quicklook-launch.\n"
+    f"{b}if (event.key === Qt.Key_Space\n"
+    f"{b}        && event.modifiers === Qt.NoModifier\n"
+    f"{b}        && gridView.currentIndex !== -1\n"
+    f"{b}        && dir.hasSelection()) {{\n"
+    f"{b}    const quickLookItem = gridView.currentItem;\n"
+    f"{b}    if (quickLookItem\n"
+    f"{b}            && !quickLookItem.blank\n"
+    f"{b}            && quickLookItem.linkDestinationUrl) {{\n"
+    f"{b}        const quickLookUrl = \"quicklook-linux:\"\n"
+    f"{b}            + encodeURIComponent(quickLookItem.linkDestinationUrl);\n"
+    f"{b}        Qt.openUrlExternally(quickLookUrl);\n"
+    f"{b}        event.accepted = true;\n"
+    f"{b}        return;\n"
+    f"{b}    }}\n"
+    f"{b}}}\n\n"
+    f"{b}// Start by assuming we might handle it\n"
+)
+s = s[:m.start()] + block + s[m.end():]
+
+if s.count(marker) != 1:
+    print("ERROR=R2_MARKER_COUNT")
+    raise SystemExit(71)
+if s.find(marker) > s.find('typeAheadTimer.restart()'):
+    print("ERROR=R2_INSERT_ORDER")
+    raise SystemExit(72)
+
+p.write_text(s, encoding="utf-8")
+PY
+
+# Preserve package file ownership/mode exactly.
+FILE_UID="$(stat -c '%u' "$TARGET")"
+FILE_GID="$(stat -c '%g' "$TARGET")"
+FILE_MODE="$(stat -c '%a' "$TARGET")"
+STAGED="$(dirname "$TARGET")/.FolderView.qml.quicklook.$$"
+trap 'rm -f "$TMP" "$STAGED"' EXIT
+install -o "$FILE_UID" -g "$FILE_GID" -m "$FILE_MODE" "$TMP" "$STAGED"
+mv -f "$STAGED" "$TARGET"
+
+AFTER="$(sha256sum "$TARGET" | awk '{print $1}')"
+echo "SHA256_AFTER=$AFTER"
+
+[[ "$AFTER" != "$BEFORE" ]] || { echo "ERROR=SHA_NO_CAMBIO"; exit 46; }
+grep -q "$MARKER" "$TARGET" || { echo "ERROR=MARKER_NO_ESCRITO"; exit 47; }
+
+echo "PATCH=INSTALADO_R2"

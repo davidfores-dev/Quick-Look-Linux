@@ -1,0 +1,5 @@
+<RCC>
+  <qresource prefix="/quicklook">
+    <file>assets/quicklook-linux-512.png</file>
+  </qresource>
+</RCC>

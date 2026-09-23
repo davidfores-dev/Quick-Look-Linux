@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_HELPER="/usr/local/lib/quicklook-linux/repair-folderview-root"
+TARGET="/usr/share/plasma/plasmoids/org.kde.desktopcontainment/contents/ui/FolderView.qml"
+MARKER="QUICKLOOK_LINUX_DESKTOP_SPACE_R2"
+LOG="/var/lib/quicklook-linux/last-desktop-repair.log"
+
+[[ -x "$ROOT_HELPER" ]] || { echo "ERROR=ROOT_HELPER_NO_EXISTE:$ROOT_HELPER"; exit 40; }
+[[ -f "$TARGET" ]] || { echo "ERROR=FOLDERVIEW_NO_EXISTE:$TARGET"; exit 41; }
+
+# The custom protocol must exist before FolderView starts using it.
+kbuildsycoca6 --noincremental >/dev/null 2>&1 || true
+HANDLER="$(xdg-mime query default x-scheme-handler/quicklook-linux 2>/dev/null || true)"
+echo "QUICKLOOK_URL_HANDLER=${HANDLER:-NO_REGISTRADO}"
+[[ "$HANDLER" == "quicklook-linux-url.desktop" ]] || { echo "ERROR=URL_HANDLER_NO_REGISTRADO"; exit 42; }
+
+BEFORE="$(sha256sum "$TARGET" | awk '{print $1}')"
+WAS_PATCHED=0
+grep -q "$MARKER" "$TARGET" && WAS_PATCHED=1
+
+sudo "$ROOT_HELPER"
+
+grep -q "$MARKER" "$TARGET" || { echo "ERROR=FOLDERVIEW_SIGUE_SIN_R2"; [[ -f "$LOG" ]] && cat "$LOG"; exit 43; }
+AFTER="$(sha256sum "$TARGET" | awk '{print $1}')"
+
+echo "FOLDERVIEW_SHA256_ANTES=$BEFORE"
+echo "FOLDERVIEW_SHA256_DESPUES=$AFTER"
+if [[ $WAS_PATCHED -eq 0 && "$BEFORE" == "$AFTER" ]]; then
+    echo "ERROR=EL_ARCHIVO_NO_CAMBIO"
+    exit 44
+fi
+[[ -d /var/lib/quicklook-linux ]] || { echo "ERROR=NO_SE_CREO_VAR_LIB_QUICKLOOK"; exit 45; }
+[[ -f /etc/pacman.d/hooks/95-quicklook-linux-desktop.hook ]] || { echo "ERROR=HOOK_PACMAN_NO_EXISTE"; exit 46; }
+
+# Remove QML caches so the modified FolderView is loaded immediately.
+rm -rf "$HOME/.cache/plasmashell/qmlcache" \
+       "$HOME/.cache/qmlcache" \
+       "$HOME/.cache/org.kde.plasmashell/qmlcache" 2>/dev/null || true
+
+if systemctl --user list-unit-files 2>/dev/null | grep -q '^plasma-plasmashell\.service'; then
+    systemctl --user restart plasma-plasmashell.service
+else
+    kquitapp6 plasmashell 2>/dev/null || true
+    sleep 1
+    nohup plasmashell --replace >/tmp/quicklook-plasma-restart.log 2>&1 &
+fi
+
+for _ in {1..50}; do
+    pgrep -x plasmashell >/dev/null 2>&1 && break
+    sleep 0.1
+done
+pgrep -x plasmashell >/dev/null 2>&1 || { echo "ERROR=PLASMASHELL_NO_VOLVIO"; exit 47; }
+
+echo "DESKTOP_QUICKLOOK_R2=INSTALADO_Y_CARGADO"
