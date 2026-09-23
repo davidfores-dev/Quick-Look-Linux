@@ -1,9 +1,11 @@
+
 # QuickLook Linux
 
 **Version 1.0.2 R8.9 — Final / Compatible con Instalar**
 
 QuickLook Linux lleva una vista previa rápida estilo Quick Look de Mac OS a KDE Plasma en Arch Linux / CachyOS. Permite seleccionar un archivo y pulsar **Espacio** para abrir una vista previa rápida, tanto desde Dolphin como desde el escritorio Plasma. 
 
+<img width="1920" height="1080" alt="Captura de pantalla_20260924_002815" src="https://github.com/user-attachments/assets/2e13bffd-2886-49a7-a02f-377e9306677f" />
 ## R8.9 final
 
 Esta es la release final validada de la rama R8.9. Mantiene el contenedor `.run` compatible con la app **Instalar**, el centrado dinámico de la ventana y la integración con el escritorio Plasma mediante el parche R2 verificado.
